@@ -98,6 +98,11 @@ name = "ferrotorch_bench"
 path = "examples/ferrotorch_bench.rs"
 
 [[example]]
+name = "tf32_matmul_bench"
+path = "examples/tf32_matmul_bench.rs"
+required-features = ["gpu"]
+
+[[example]]
 name = "script_macro_demo"
 path = "examples/script_macro_demo.rs"
 # Non-test production consumer for `ferrotorch-jit-script` #[script]

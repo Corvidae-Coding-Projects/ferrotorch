@@ -214,6 +214,7 @@ pub mod module_cache;
 #[cfg(feature = "cuda")]
 pub mod nan_reductions;
 pub mod pool;
+pub mod precision;
 #[cfg(feature = "cuda")]
 pub mod reduce_arg;
 #[cfg(feature = "cuda")]
@@ -313,6 +314,7 @@ pub use memory_guard::{
     MemoryReservation, MemoryStats, MemoryWatchdog, OomPolicy, PressureLevel,
 };
 pub use pool::{cached_bytes, empty_cache, empty_cache_all, round_len};
+pub use precision::{MatmulPrecision, matmul_precision, with_matmul_precision};
 #[cfg(feature = "cuda")]
 pub use repeat_interleave::{
     gpu_repeat_interleave_backward_bf16, gpu_repeat_interleave_backward_f16,

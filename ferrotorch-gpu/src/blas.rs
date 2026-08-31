@@ -56,13 +56,14 @@
 //! | REQ-10 (structured errors / no silent CPU fallback) | SHIPPED | every cuBLAS call in `blas.rs` is wrapped to surface `GpuError::Blas(...)` / `GpuError::Driver(...)`; consumer every caller in `backend_impl.rs` uses `.map_err(Self::map_gpu_err)?` |
 
 #[cfg(feature = "cuda")]
-use cudarc::cublas::{Gemm, GemmConfig, Gemv, GemvConfig, StridedBatchedConfig, sys};
+use cudarc::cublas::{CudaBlas, Gemm, GemmConfig, Gemv, GemvConfig, StridedBatchedConfig, sys};
 #[cfg(feature = "cuda")]
 use cudarc::driver::DevicePtr;
 
 use crate::buffer::CudaBuffer;
 use crate::device::GpuDevice;
 use crate::error::{GpuError, GpuResult};
+use crate::precision::MatmulPrecision;
 #[cfg(feature = "cuda")]
 use crate::transfer::{alloc_zeros_f32, alloc_zeros_f64};
 
@@ -196,6 +197,7 @@ pub fn gpu_matmul_f32(
     //   on `device` on line 129. All three pointers are valid on the
     //   handle's stream.
     unsafe {
+        apply_matmul_precision(blas)?;
         blas.gemm(cfg, b.inner(), a.inner(), c.inner_mut())?;
     }
 
@@ -450,6 +452,7 @@ pub fn gpu_matmul_f32_nt(
     // - Device residency: `a`/`b` device-checked above; `c` allocated on
     //   `device`. All three pointers valid on the handle's stream.
     unsafe {
+        apply_matmul_precision(blas)?;
         blas.gemm(cfg, b.inner(), a.inner(), c.inner_mut())?;
     }
 
@@ -662,6 +665,7 @@ pub fn gpu_bmm_f32(
     // - Aliasing: `a` and `b` are shared `&CudaBuffer<f32>`; `c` is freshly
     //   allocated and therefore non-aliasing.
     unsafe {
+        apply_matmul_precision(blas)?;
         blas.gemm_strided_batched(cfg, b.inner(), a.inner(), c.inner_mut())?;
     }
 
@@ -1093,6 +1097,7 @@ pub fn gpu_broadcast_bmm_f32(
         //   is guarded per-run.
         // - Row-major trick is identical to `gpu_bmm_f32` above.
         unsafe {
+            apply_matmul_precision(blas)?;
             blas.gemm_strided_batched(cfg, &b_view, &a_view, &mut c_view)?;
         }
     }
@@ -1959,6 +1964,7 @@ pub fn gpu_matmul_f32_into(
     //   and output cannot alias.
     // - `blas` is a valid `Arc<CudaBlas>` from `device.blas()` line 478.
     unsafe {
+        apply_matmul_precision(blas)?;
         blas.gemm(cfg, b.inner(), a.inner(), c.inner_mut())?;
     }
     Ok(())
@@ -2040,6 +2046,7 @@ pub fn gpu_bmm_f32_into(
     //   self-aliasing.
     // - `blas` is a valid `Arc<CudaBlas>` from `device.blas()` line 532.
     unsafe {
+        apply_matmul_precision(blas)?;
         blas.gemm_strided_batched(cfg, b.inner(), a.inner(), c.inner_mut())?;
     }
     Ok(())
@@ -4695,4 +4702,28 @@ mod tests {
             assert!(v.is_finite(), "non-finite output in bf16 matmul");
         }
     }
+}
+
+thread_local! {
+    // Last applied mode for this thread.
+    static LAST_APPLIED_MODE: std::cell::Cell<Option<MatmulPrecision>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn apply_matmul_precision(blas: &CudaBlas) -> GpuResult<()> {
+    use cudarc::cublas::sys::{cublasSetMathMode, cublasMath_t};
+
+    let want = crate::precision::matmul_precision();
+    if LAST_APPLIED_MODE.with(std::cell::Cell::get) == Some(want) {
+        return Ok(());
+    }
+
+    let mode = match want {
+        MatmulPrecision::Pedantic => cublasMath_t::CUBLAS_PEDANTIC_MATH,
+        MatmulPrecision::Highest  => cublasMath_t::CUBLAS_DEFAULT_MATH,
+        MatmulPrecision::High     => cublasMath_t::CUBLAS_TF32_TENSOR_OP_MATH,
+    };
+    unsafe { cublasSetMathMode(*blas.handle(), mode).result()?; }
+    LAST_APPLIED_MODE.with(|c| c.set(Some(want)));
+    Ok(())
 }
